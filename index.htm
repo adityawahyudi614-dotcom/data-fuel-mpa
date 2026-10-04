@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Fuel MPA - Realtime System</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- jsPDF & AutoTable -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  
+  <!-- Firebase SDK (Modular CDN) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+      getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // ==========================================
+    // KONFIGURASI FIREBASE ANDA
+    // Ganti dengan konfigurasi Firebase Console Anda agar terhubung ke database cloud Anda
+    // ==========================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyDummyKeyUntukTestingSistemMPA123",
+      authDomain: "daily-fuel-mpa.firebaseapp.com",
+      projectId: "daily-fuel-mpa",
+      storageBucket: "daily-fuel-mpa.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:abcdef"
+    };
+
+    let db = null;
+    let isFirebaseReady = false;
+
+    try {
+      const app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      isFirebaseReady = true;
+      console.log("Firebase initialized");
+    } catch (e) {
+      console.warn("Firebase config belum diisi atau offline. Menggunakan penyimpanan simulasi cloud browser (localStorage broadcast).", e);
+    }
+
+    // Expose ke window agar bisa diakses script reguler
+    window.db = db;
+    window.isFirebaseReady = isFirebaseReady;
+    window.collection = collection;
+    window.addDoc = addDoc;
+    window.onSnapshot = onSnapshot;
+    window.query = query;
+    window.orderBy = orderBy;
+    window.serverTimestamp = serverTimestamp;
+
+    // Trigger inisialisasi listener real-time di app
+    if (window.initRealtimeSync) {
+      window.initRealtimeSync();
+    }
+  </script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen pb-16 font-sans">
+
+  <!-- Top Navbar & Switcher Role -->
+  <header class="bg-slate-900 text-white shadow-md sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-2">
+      <div class="flex items-center space-x-2">
+        <i class="fa-solid fa-gas-pump text-amber-500 text-xl"></i>
+        <span class="font-extrabold tracking-wide text-lg">DAILY FUEL MPA</span>
+        <span id="syncBadge" class="bg-emerald-500/20 text-emerald-400 text-xs px-2 py-0.5 rounded-full border border-emerald-500/40 flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Live Sync
+        </span>
+      </div>
+
+      <!-- Tab Switcher: Fuelman vs Admin -->
+      <div class="flex bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs font-semibold">
+        <button id="tabFuelmanBtn" onclick="switchView('fuelman')" class="px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 shadow transition flex items-center gap-1.5">
+          <i class="fa-solid fa-mobile-screen"></i> Mode Fuelman
+        </button>
+        <button id="tabAdminBtn" onclick="switchView('admin')" class="px-3 py-1.5 rounded-md text-slate-300 hover:text-white transition flex items-center gap-1.5">
+          <i class="fa-solid fa-database"></i> Panel Admin (Date Fuel)
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto p-3 sm:p-4">
+
+    <!-- ============================================================== -->
+    <!-- VIEW 1: MODE FUELMAN (INPUT LAPANGAN)                          -->
+    <!-- ============================================================== -->
+    <section id="viewFuelman" class="space-y-4">
+      
+      <!-- Card Header Sesi -->
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+            <i class="fa-solid fa-truck-droplet text-amber-500"></i> Header Sesi Shift & Fuel Truck
+          </h2>
+          <button onclick="loadSampleData()" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded font-medium transition">
+            Isi Contoh
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs sm:text-sm">
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Tanggal</label>
+            <input type="text" id="fmTanggal" class="w-full border rounded-lg p-2 font-semibold" value="04-Okt-26">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Shift</label>
+            <select id="fmShift" class="w-full border rounded-lg p-2 font-semibold bg-white">
+              <option value="1">Shift 1 (Siang)</option>
+              <option value="2">Shift 2 (Malam)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">No. Fuel Truck</label>
+            <select id="fmNoFt" class="w-full border rounded-lg p-2 font-semibold bg-white">
+              <option value="FT01">FT01</option>
+              <option value="FT02">FT02</option>
+              <option value="FT03">FT03</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Nama Fuelman</label>
+            <input type="text" id="fmFuelman" class="w-full border rounded-lg p-2 font-semibold" placeholder="Contoh: Solikin">
+          </div>
+        </div>
+
+        <!-- Flowmeter & Sounding -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs sm:text-sm mt-3 pt-3 border-t">
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Flowmeter Awal</label>
+            <input type="number" id="fmFlowAwal" oninput="hitungTotal()" class="w-full border rounded-lg p-2 font-mono font-bold" placeholder="5193884">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Flowmeter Akhir</label>
+            <input type="number" id="fmFlowAkhir" oninput="hitungTotal()" class="w-full border rounded-lg p-2 font-mono font-bold" placeholder="5197550">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Sounding Awal (Dp / Bk)</label>
+            <div class="flex gap-1">
+              <input type="text" id="fmSndAwDp" placeholder="Dp" class="w-1/2 border rounded p-1.5 text-center font-mono">
+              <input type="text" id="fmSndAwBk" placeholder="Bk" class="w-1/2 border rounded p-1.5 text-center font-mono">
+            </div>
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-medium">Sounding Akhir (Dp / Bk)</label>
+            <div class="flex gap-1">
+              <input type="text" id="fmSndAkDp" placeholder="Dp" class="w-1/2 border rounded p-1.5 text-center font-mono">
+              <input type="text" id="fmSndAkBk" placeholder="Bk" class="w-1/2 border rounded p-1.5 text-center font-mono">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ringkasan Real-Time Bar Card -->
+      <div class="grid grid-cols-3 gap-2 text-center text-xs">
+        <div class="bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+          <span class="text-amber-800 font-semibold block">Total Qty (L)</span>
+          <span id="txtTotalQty" class="text-base sm:text-lg font-black text-amber-950">0</span>
+        </div>
+        <div class="bg-blue-50 p-2.5 rounded-xl border border-blue-200">
+          <span class="text-blue-800 font-semibold block">Liter by Flow</span>
+          <span id="txtLiterFlow" class="text-base sm:text-lg font-black text-blue-950">0</span>
+        </div>
+        <div class="bg-slate-100 p-2.5 rounded-xl border border-slate-300">
+          <span class="text-slate-700 font-semibold block">Selisih Unit vs Flow</span>
+          <span id="txtSelisih" class="text-base sm:text-lg font-black text-slate-900">0</span>
+        </div>
+      </div>
+
+      <!-- Container Pengisian Unit -->
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
+        <div class="flex justify-between items-center">
+          <h3 class="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+            <i class="fa-solid fa-list-check text-amber-500"></i> Rincian Pengisian Alat Berat
+          </h3>
+          <button onclick="tambahBarisUnit()" class="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs px-3 py-1.5 rounded-lg font-bold shadow-sm transition flex items-center gap-1">
+            <i class="fa-solid fa-plus"></i> Tambah Unit
+          </button>
+        </div>
+
+        <div id="unitRowsContainer" class="space-y-3">
+          <!-- Baris pengisian masuk ke sini secara dinamis -->
+        </div>
+      </div>
+
+      <!-- Tombol Aksi Utama Fuelman -->
+      <div class="pt-2">
+        <button onclick="submitDanEksporPDF()" class="w-full bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-base transition">
+          <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
+          <span>Kirim ke Cloud Database & Ekspor PDF</span>
+        </button>
+        <p class="text-center text-xs text-slate-500 mt-2">
+          *Data otomatis tersimpan di cloud database admin & laporan PDF otomatis terunduh di HP.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- VIEW 2: MODE ADMIN (DATE FUEL & HISTORY REKAP)                 -->
+    <!-- ============================================================== -->
+    <section id="viewAdmin" class="hidden space-y-4">
+      
+      <!-- Filter Bar -->
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3 pb-3 border-b">
+          <div>
+            <h2 class="font-bold text-slate-800 text-base flex items-center gap-2">
+              <i class="fa-solid fa-calendar-days text-amber-500"></i> Date Fuel & Master History
+            </h2>
+            <p class="text-xs text-slate-500">Pilih tanggal dan sesi fuelman untuk melihat rincian serta menyalin ke master sheet.</p>
+          </div>
+          <span id="totalSesiBadge" class="bg-slate-100 text-slate-700 text-xs px-3 py-1 rounded-full font-bold">
+            0 Laporan Masuk
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs sm:text-sm">
+          <div>
+            <label class="text-slate-500 block mb-1 font-semibold">Filter Tanggal</label>
+            <input type="text" id="adminFilterDate" oninput="renderDaftarSesiAdmin()" placeholder="Semua Tanggal atau contoh: 04-Okt-26" class="w-full border rounded-lg p-2 font-medium">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-semibold">Filter Fuel Truck</label>
+            <select id="adminFilterFt" onchange="renderDaftarSesiAdmin()" class="w-full border rounded-lg p-2 font-medium bg-white">
+              <option value="">Semua FT</option>
+              <option value="FT01">FT01</option>
+              <option value="FT02">FT02</option>
+              <option value="FT03">FT03</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-1 font-semibold">Filter Shift</label>
+            <select id="adminFilterShift" onchange="renderDaftarSesiAdmin()" class="w-full border rounded-lg p-2 font-medium bg-white">
+              <option value="">Semua Shift</option>
+              <option value="1">Shift 1</option>
+              <option value="2">Shift 2</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Layout 2 Kolom Admin: List File Sesi & Preview Detail -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- Kolom Kiri: Daftar Sesi per Tanggal -->
+        <div class="lg:col-span-5 bg-white p-3 rounded-xl shadow-sm border border-slate-200">
+          <h3 class="font-bold text-slate-700 text-xs uppercase tracking-wider mb-2 flex items-center justify-between">
+            <span>Daftar Sesi Masuk</span>
+            <i class="fa-solid fa-list text-slate-400"></i>
+          </h3>
+          <div id="adminSesiList" class="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+            <div class="text-center py-8 text-slate-400 text-xs">
+              <i class="fa-solid fa-spinner fa-spin text-lg mb-2"></i><br>Menunggu data masuk...
+            </div>
+          </div>
+        </div>
+
+        <!-- Kolom Kanan: Rincian Sesi & Tombol Copy Google Sheet -->
+        <div class="lg:col-span-7 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+          <div id="adminDetailPanel">
+            <div class="text-center py-12 text-slate-400 text-xs">
+              <i class="fa-solid fa-hand-pointer text-2xl text-slate-300 mb-2 block"></i>
+              Silakan pilih salah satu sesi laporan di sebelah kiri untuk melihat rincian dan menyalin ke Google Sheets.
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="fixed bottom-5 right-5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl z-50 text-xs flex items-center gap-2 transform translate-y-24 opacity-0 transition duration-300">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
+    <span id="toastMsg">Notifikasi</span>
+  </div>
+
+  <script>
+    // ==========================================
+    // STATE & MANAJEMEN DATA
+    // ==========================================
+    let daftarLaporan = [];
+    let terpilihIndex = null;
+    let unitRowCount = 0;
+
+    // Local Storage Fallback Key
+    const STORAGE_KEY = "DAILY_FUEL_MPA_DATABASE_V1";
+
+    // Switch Tampilan
+    function switchView(mode) {
+      const fuelmanView = document.getElementById('viewFuelman');
+      const adminView = document.getElementById('viewAdmin');
+      const tabFuelmanBtn = document.getElementById('tabFuelmanBtn');
+      const tabAdminBtn = document.getElementById('tabAdminBtn');
+
+      if (mode === 'fuelman') {
+        fuelmanView.classList.remove('hidden');
+        adminView.classList.add('hidden');
+        tabFuelmanBtn.className = "px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 shadow transition flex items-center gap-1.5";
+        tabAdminBtn.className = "px-3 py-1.5 rounded-md text-slate-300 hover:text-white transition flex items-center gap-1.5";
+      } else {
+        fuelmanView.classList.add('hidden');
+        adminView.classList.remove('hidden');
+        tabAdminBtn.className = "px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 shadow transition flex items-center gap-1.5";
+        tabFuelmanBtn.className = "px-3 py-1.5 rounded-md text-slate-300 hover:text-white transition flex items-center gap-1.5";
+        renderDaftarSesiAdmin();
+      }
+    }
+
+    // Tampilkan Toast Notifikasi
+    function showToast(msg, isSuccess = true) {
+      const toast = document.getElementById('toast');
+      const icon = document.getElementById('toastIcon');
+      const txt = document.getElementById('toastMsg');
+
+      txt.innerText = msg;
+      icon.className = isSuccess ? "fa-solid fa-circle-check text-emerald-400 text-sm" : "fa-solid fa-triangle-exclamation text-amber-400 text-sm";
+      toast.classList.remove('translate-y-24', 'opacity-0');
+
+      setTimeout(() => {
+        toast.classList.add('translate-y-24', 'opacity-0');
+      }, 3500);
+    }
+
+    // ==========================================
+    // FORM FUELMAN & VALIDASI INPUT
+    // ==========================================
+    function tambahBarisUnit(data = null) {
+      unitRowCount++;
+      const id = unitRowCount;
+      const container = document.getElementById('unitRowsContainer');
+
+      const card = document.createElement('div');
+      card.id = `row-unit-${id}`;
+      card.className = "p-3 border rounded-xl bg-slate-50 space-y-2 relative transition hover:border-slate-300";
+
+      card.innerHTML = `
+        <div class="flex justify-between items-center border-b pb-1.5">
+          <span class="text-xs font-bold text-slate-700 flex items-center gap-1">
+            <span class="bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded text-[10px]">#${id}</span> Unit Transaksi
+          </span>
+          <button onclick="hapusBarisUnit(${id})" class="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
+            <i class="fa-solid fa-trash-can"></i> Hapus
+          </button>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+          <div>
+            <label class="text-slate-500 block mb-0.5">Waktu (Jam.Menit)</label>
+            <input type="text" class="w-full border rounded p-1.5 font-medium u-waktu" placeholder="06.50" 
+              value="${data ? data.waktu : ''}" onchange="this.value = this.value.replace(':', '.')">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-0.5">Nama Unit (No Spasi)</label>
+            <input type="text" class="w-full border rounded p-1.5 font-bold uppercase u-unit" placeholder="CMT622" 
+              value="${data ? data.unit : ''}" oninput="this.value = this.value.toUpperCase().replace(/\\s+/g, '')">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-0.5">Nama Operator</label>
+            <input type="text" class="w-full border rounded p-1.5 u-operator font-medium" placeholder="Ismail" 
+              value="${data ? data.operator : ''}">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-0.5">HM (Koma)</label>
+            <input type="text" class="w-full border rounded p-1.5 u-hm font-mono" placeholder="2957,40" 
+              value="${data ? data.hm : ''}" oninput="this.value = this.value.replace('.', ',')">
+          </div>
+          <div>
+            <label class="text-slate-500 block mb-0.5 font-semibold text-amber-800">Quantity (L)</label>
+            <input type="number" class="w-full border border-amber-300 bg-amber-50/50 rounded p-1.5 font-bold text-amber-900 u-qty" placeholder="320" 
+              value="${data ? data.qty : ''}" oninput="hitungTotal()">
+          </div>
+          <div class="col-span-2 sm:col-span-5">
+            <label class="text-slate-500 block mb-0.5">Keterangan (Opsional)</label>
+            <input type="text" class="w-full border rounded p-1.5 u-ket" placeholder="Normal / Rontok" 
+              value="${data ? data.ket : ''}">
+          </div>
+        </div>
+      `;
+      container.appendChild(card);
+      hitungTotal();
+    }
+
+    function hapusBarisUnit(id) {
+      const el = document.getElementById(`row-unit-${id}`);
+      if (el) el.remove();
+      hitungTotal();
+    }
+
+    function hitungTotal() {
+      const qtyInputs = document.querySelectorAll('.u-qty');
+      let totalQty = 0;
+      qtyInputs.forEach(i => {
+        const val = parseFloat(i.value);
+        if (!isNaN(val)) totalQty += val;
+      });
+
+      const flowAwal = parseFloat(document.getElementById('fmFlowAwal').value) || 0;
+      let flowAkhir = parseFloat(document.getElementById('fmFlowAkhir').value);
+
+      if (isNaN(flowAkhir) || flowAkhir === 0) {
+        flowAkhir = flowAwal + totalQty;
+      }
+
+      const literByFlow = flowAkhir - flowAwal;
+      const selisih = totalQty - literByFlow;
+
+      document.getElementById('txtTotalQty').innerText = totalQty.toLocaleString('id-ID');
+      document.getElementById('txtLiterFlow').innerText = literByFlow.toLocaleString('id-ID');
+      document.getElementById('txtSelisih').innerText = selisih.toLocaleString('id-ID');
+
+      return { totalQty, flowAwal, flowAkhir, literByFlow, selisih };
+    }
+
+    function loadSampleData() {
+      document.getElementById('fmTanggal').value = "04-Okt-26";
+      document.getElementById('fmShift').value = "1";
+      document.getElementById('fmNoFt').value = "FT01";
+      document.getElementById('fmFuelman').value = "Solikin";
+      document.getElementById('fmFlowAwal').value = 5193884;
+      document.getElementById('fmFlowAkhir').value = 5194244;
+      document.getElementById('fmSndAwDp').value = "140";
+      document.getElementById('fmSndAwBk').value = "142";
+      document.getElementById('fmSndAkDp').value = "110";
+      document.getElementById('fmSndAkBk').value = "112";
+
+      document.getElementById('unitRowsContainer').innerHTML = "";
+      unitRowCount = 0;
+
+      tambahBarisUnit({ waktu: '06.50', unit: 'MH02', operator: 'Solikin', hm: '-', qty: 29, ket: '' });
+      tambahBarisUnit({ waktu: '07.01', unit: 'B01', operator: 'Hendro', hm: '-', qty: 29, ket: '' });
+      tambahBarisUnit({ waktu: '07.44', unit: 'CMT622', operator: 'Ismail', hm: '2957,40', qty: 302, ket: '' });
+      showToast("Data sampel simulasi shift berhasil dimuat!");
+    }
+
+    // ==========================================
+    // SIMPAN KE CLOUD & EKSPOR PDF
+    // ==========================================
+    async function submitDanEksporPDF() {
+      const rows = document.querySelectorAll('#unitRowsContainer > div');
+      if (rows.length === 0) {
+        alert("Silakan tambahkan minimal 1 baris pengisian unit!");
+        return;
+      }
+
+      const totals = hitungTotal();
+      const items = [];
+      let runningFlow = totals.flowAwal;
+
+      rows.forEach((r, idx) => {
+        const qty = parseFloat(r.querySelector('.u-qty').value) || 0;
+        const fAwal = runningFlow;
+        const fAkhir = fAwal + qty;
+        runningFlow = fAkhir;
+
+        items.push({
+          no: idx + 1,
+          waktu: r.querySelector('.u-waktu').value || '-',
+          unit: r.querySelector('.u-unit').value || '-',
+          operator: r.querySelector('.u-operator').value || '-',
+          hm: r.querySelector('.u-hm').value || '-',
+          qty: qty,
+          flowAwal: fAwal,
+          flowAkhir: fAkhir,
+          ket: r.querySelector('.u-ket').value || ''
+        });
+      });
+
+      const payload = {
+        tanggal: document.getElementById('fmTanggal').value,
+        shift: document.getElementById('fmShift').value,
+        noFt: document.getElementById('fmNoFt').value,
+        fuelman: document.getElementById('fmFuelman').value || 'Tanpa Nama',
+        flowAwal: totals.flowAwal,
+        flowAkhir: totals.flowAkhir,
+        sndAwDp: document.getElementById('fmSndAwDp').value || '-',
+        sndAwBk: document.getElementById('fmSndAwBk').value || '-',
+        sndAkDp: document.getElementById('fmSndAkDp').value || '-',
+        sndAkBk: document.getElementById('fmSndAkBk').value || '-',
+        totalQty: totals.totalQty,
+        literByFlow: totals.literByFlow,
+        selisih: totals.selisih,
+        items: items,
+        timestamp: new Date().toISOString()
+      };
+
+      // 1. Simpan ke Cloud (Firebase / LocalStorage Sync)
+      await simpanDataCloud(payload);
+
+      // 2. Unduh PDF Laporan untuk Fuelman kirim ke WA
+      downloadPDF(payload);
+
+      showToast("Laporan Berhasil Terkirim ke Cloud & PDF Siap Dibagikan!");
+    }
+
+    async function simpanDataCloud(data) {
+      if (window.isFirebaseReady && window.db) {
+        try {
+          await window.addDoc(window.collection(window.db, "daily_fuel_reports"), {
+            ...data,
+            createdAt: window.serverTimestamp()
+          });
+          return;
+        } catch (err) {
+          console.warn("Gagal simpan ke Firebase, fallback ke storage lokal:", err);
+        }
+      }
+
+      // Fallback: LocalStorage + StorageEvent (Real-time antar tab browser)
+      let stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      stored.unshift(data);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      broadcastStorageUpdate();
+    }
+
+    function broadcastStorageUpdate() {
+      window.dispatchEvent(new Event('storage'));
+      loadDataFromStorage();
+    }
+
+    // ==========================================
+    // GENERATOR PDF ENGINE
+    // ==========================================
+    function downloadPDF(session) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF('p', 'mm', 'a4');
+
+      // Header Brand
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text("DAILY FUEL REPORT - PT MITRA PRIMA ANUGERAH", 105, 14, { align: 'center' });
+
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Tanggal: ${session.tanggal}   |   Shift: ${session.shift}   |   No FT: ${session.noFt}   |   Fuelman: ${session.fuelman}`, 105, 20, { align: 'center' });
+
+      // Tabel Header Sounding & Flow
+      doc.autoTable({
+        startY: 25,
+        theme: 'plain',
+        styles: { fontSize: 8, cellPadding: 1.5 },
+        body: [
+          [
+            `Flowmeter Awal: ${session.flowAwal.toLocaleString('id-ID')}`,
+            `Flowmeter Akhir: ${session.flowAkhir.toLocaleString('id-ID')}`,
+            `Sounding Awal: Dp ${session.sndAwDp} / Bk ${session.sndAwBk}`,
+            `Sounding Akhir: Dp ${session.sndAkDp} / Bk ${session.sndAkBk}`
+          ]
+        ]
+      });
+
+      // Tabel Detail Transaksi
+      const tableData = session.items.map(it => [
+        it.no,
+        it.waktu,
+        it.unit,
+        it.operator,
+        it.hm,
+        it.qty.toLocaleString('id-ID'),
+        it.flowAwal.toLocaleString('id-ID'),
+        it.flowAkhir.toLocaleString('id-ID'),
+        it.ket
+      ]);
+
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY + 3,
+        head: [['No', 'Waktu', 'Unit', 'Operator', 'HM', 'Qty (L)', 'Flow Awal', 'Flow Akhir', 'Ket']],
+        body: tableData,
+        theme: 'grid',
+        headStyles: { fillColor: [217, 119, 6], textColor: [255, 255, 255], fontStyle: 'bold' },
+        styles: { fontSize: 8, halign: 'center' },
+        columnStyles: {
+          2: { halign: 'left', fontStyle: 'bold' },
+          3: { halign: 'left' },
+          8: { halign: 'left' }
+        }
+      });
+
+      // Rekapitulasi Akhir
+      const finalY = doc.lastAutoTable.finalY + 8;
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Total Pengisian Unit : ${session.totalQty.toLocaleString('id-ID')} Liter`, 14, finalY);
+      doc.text(`Liter by Flowmeter    : ${session.literByFlow.toLocaleString('id-ID')} Liter`, 14, finalY + 5);
+      doc.text(`Selisih (Loss / Gain) : ${session.selisih.toLocaleString('id-ID')} Liter`, 14, finalY + 10);
+
+      // Tanda Tangan
+      const signY = finalY + 22;
+      doc.setFont('helvetica', 'normal');
+      doc.text("Fuelman Lapangan", 30, signY);
+      doc.text("Pengawas / Foreman", 105, signY, { align: 'center' });
+      doc.text("Site Admin", 175, signY, { align: 'right' });
+
+      doc.text(`( ${session.fuelman} )`, 30, signY + 18);
+      doc.text("( ......................... )", 105, signY + 18, { align: 'center' });
+      doc.text("( ......................... )", 175, signY + 18, { align: 'right' });
+
+      doc.save(`Daily_Fuel_${session.noFt}_Shift${session.shift}_${session.tanggal}.pdf`);
+    }
+
+    // ==========================================
+    // LOGIKA ADMIN & EXPORT GOOGLE SHEETS
+    // ==========================================
+    window.initRealtimeSync = function() {
+      if (window.isFirebaseReady && window.db) {
+        const q = window.query(window.collection(window.db, "daily_fuel_reports"), window.orderBy("timestamp", "desc"));
+        window.onSnapshot(q, (snapshot) => {
+          const list = [];
+          snapshot.forEach(doc => list.push(doc.data()));
+          daftarLaporan = list;
+          renderDaftarSesiAdmin();
+        });
+      } else {
+        loadDataFromStorage();
+      }
+    };
+
+    function loadDataFromStorage() {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        daftarLaporan = JSON.parse(stored);
+      } else {
+        // Data default sampel awal jika kosong
+        daftarLaporan = [
+          {
+            tanggal: "04-Okt-26", shift: "1", noFt: "FT01", fuelman: "Solikin",
+            flowAwal: 5193884, flowAkhir: 5194244, sndAwDp: "140", sndAwBk: "142", sndAkDp: "110", sndAkBk: "112",
+            totalQty: 360, literByFlow: 360, selisih: 0,
+            items: [
+              { no: 1, waktu: "06.50", unit: "MH02", operator: "Solikin", hm: "-", qty: 29, flowAwal: 5193884, flowAkhir: 5193913, ket: "" },
+              { no: 2, waktu: "07.01", unit: "B01", operator: "Hendro", hm: "-", qty: 29, flowAwal: 5193913, flowAkhir: 5193942, ket: "" },
+              { no: 3, waktu: "07.44", unit: "CMT622", operator: "Ismail", hm: "2957,40", qty: 302, flowAwal: 5193942, flowAkhir: 5194244, ket: "" }
+            ]
+          }
+        ];
+      }
+      renderDaftarSesiAdmin();
+    }
+
+    function renderDaftarSesiAdmin() {
+      const container = document.getElementById('adminSesiList');
+      const filterDate = document.getElementById('adminFilterDate').value.trim().toLowerCase();
+      const filterFt = document.getElementById('adminFilterFt').value;
+      const filterShift = document.getElementById('adminFilterShift').value;
+
+      const filtered = daftarLaporan.filter(d => {
+        const matchDate = !filterDate || d.tanggal.toLowerCase().includes(filterDate);
+        const matchFt = !filterFt || d.noFt === filterFt;
+        const matchShift = !filterShift || d.shift === filterShift;
+        return matchDate && matchFt && matchShift;
+      });
+
+      document.getElementById('totalSesiBadge').innerText = `${filtered.length} Laporan`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">Tidak ada sesi laporan yang cocok dengan filter.</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map((sesi, idx) => `
+        <div onclick="pilihSesiAdmin(${idx})" class="p-3 rounded-lg border cursor-pointer transition ${terpilihIndex === idx ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 bg-slate-50 hover:bg-slate-100'}">
+          <div class="flex justify-between items-start mb-1">
+            <span class="font-bold text-xs text-slate-900">${sesi.tanggal}</span>
+            <span class="bg-slate-900 text-white text-[10px] px-2 py-0.5 rounded font-bold">${sesi.noFt} - Shift ${sesi.shift}</span>
+          </div>
+          <div class="flex justify-between text-xs text-slate-500">
+            <span>Fuelman: <strong class="text-slate-700">${sesi.fuelman}</strong></span>
+            <span class="font-bold text-amber-700">${sesi.totalQty.toLocaleString('id-ID')} L</span>
+          </div>
+        </div>
+      `).join('');
+
+      // Jika belum ada terpilih, buka yang paling baru
+      if (terpilihIndex === null && filtered.length > 0) {
+        pilihSesiAdmin(0);
+      }
+    }
+
+    function pilihSesiAdmin(index) {
+      terpilihIndex = index;
+      renderDaftarSesiAdmin();
+      const sesi = daftarLaporan[index];
+      if (!sesi) return;
+
+      const panel = document.getElementById('adminDetailPanel');
+      panel.innerHTML = `
+        <div class="space-y-4">
+          <div class="flex flex-wrap justify-between items-center gap-2 border-b pb-3">
+            <div>
+              <span class="text-xs text-slate-400 font-bold uppercase">Detail Sesi Terpilih</span>
+              <h4 class="text-lg font-black text-slate-800">${sesi.tanggal} &bull; ${sesi.noFt} (Shift ${sesi.shift})</h4>
+              <p class="text-xs text-slate-500">Fuelman: <strong>${sesi.fuelman}</strong> | Total: <strong>${sesi.totalQty.toLocaleString('id-ID')} Liter</strong></p>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="downloadPDF(daftarLaporan[${index}])" class="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-2 rounded-lg font-bold shadow transition flex items-center gap-1">
+                <i class="fa-solid fa-file-pdf"></i> Unduh PDF
+              </button>
+            </div>
+          </div>
+
+          <!-- Tombol Salin Google Sheets -->
+          <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-xl flex flex-wrap justify-between items-center gap-2">
+            <div>
+              <span class="text-xs font-bold text-emerald-950 block">Salin ke Master Google Sheets</span>
+              <span class="text-[11px] text-emerald-800">Tinggal klik lalu paste (Ctrl+V) langsung ke spreadsheet master.</span>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="salinFormatDailyFuel(${index})" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-bold shadow transition flex items-center gap-1">
+                <i class="fa-solid fa-copy"></i> Salin Format Rekap
+              </button>
+              <button onclick="salinFormatMasterLog(${index})" class="bg-slate-900 hover:bg-slate-800 text-white text-xs px-3 py-2 rounded-lg font-bold shadow transition flex items-center gap-1">
+                <i class="fa-solid fa-table-list"></i> Salin Master Flat
+              </button>
+            </div>
+          </div>
+
+          <!-- Rincian Tabel -->
+          <div class="overflow-x-auto border rounded-xl">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead class="bg-slate-100 text-slate-700 font-bold border-b">
+                <tr>
+                  <th class="p-2 text-center">No</th>
+                  <th class="p-2">Waktu</th>
+                  <th class="p-2">Unit</th>
+                  <th class="p-2">Operator</th>
+                  <th class="p-2">HM</th>
+                  <th class="p-2 text-right">Qty (L)</th>
+                  <th class="p-2 text-right">Flow Awal</th>
+                  <th class="p-2 text-right">Flow Akhir</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y text-slate-600">
+                ${sesi.items.map(it => `
+                  <tr class="hover:bg-slate-50">
+                    <td class="p-2 text-center">${it.no}</td>
+                    <td class="p-2">${it.waktu}</td>
+                    <td class="p-2 font-bold text-slate-800">${it.unit}</td>
+                    <td class="p-2">${it.operator}</td>
+                    <td class="p-2 font-mono">${it.hm}</td>
+                    <td class="p-2 text-right font-bold text-amber-700">${it.qty.toLocaleString('id-ID')}</td>
+                    <td class="p-2 text-right font-mono">${it.flowAwal.toLocaleString('id-ID')}</td>
+                    <td class="p-2 text-right font-mono">${it.flowAkhir.toLocaleString('id-ID')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // Salin Format 1: Format Rekap 2 Kolom Daily Sheet (Sesuai Gambar PRD)
+    function salinFormatDailyFuel(idx) {
+      const s = daftarLaporan[idx];
+      let tsv = "NO\tShift\tWaktu\tNama Unit\tNama Operator/Driver\tHM Pengisian\tQuantity\tFlow Awal\tFlow Akhir\tKeterangan\n";
+      s.items.forEach(it => {
+        tsv += `${it.no}\t${s.shift}\t${it.waktu}\t${it.unit}\t${it.operator}\t${it.hm}\t${it.qty}\t${it.flowAwal}\t${it.flowAkhir}\t${it.ket}\n`;
+      });
+
+      navigator.clipboard.writeText(tsv).then(() => {
+        showToast("Format Rekap disalin! Silakan Ctrl+V di Google Sheets.");
+      }).catch(err => alert("Gagal menyalin: " + err));
+    }
+
+    // Salin Format 2: Format Raw Master Flat Database
+    function salinFormatMasterLog(idx) {
+      const s = daftarLaporan[idx];
+      let tsv = "DATE\tShift\tWaktu\tUNIT\tNama Operator/Driver\tHM Pengisian\tQuantity\tFlow Awal\tFlow Akhir\tFuel Truck\n";
+      s.items.forEach(it => {
+        tsv += `${s.tanggal}\t${s.shift}\t${it.waktu}\t${it.unit}\t${it.operator}\t${it.hm}\t${it.qty}\t${it.flowAwal}\t${it.flowAkhir}\t${s.noFt}\n`;
+      });
+
+      navigator.clipboard.writeText(tsv).then(() => {
+        showToast("Format Master Log disalin! Silakan Ctrl+V di Google Sheets.");
+      }).catch(err => alert("Gagal menyalin: " + err));
+    }
+
+    // Listener Realtime Fallback Antar Tab Browser
+    window.addEventListener('storage', () => {
+      loadDataFromStorage();
+    });
+
+    // Inisialisasi awal saat load
+    tambahBarisUnit();
+    loadDataFromStorage();
+  </script>
+</body>
+</html>
